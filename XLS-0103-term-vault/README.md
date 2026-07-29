@@ -49,7 +49,7 @@ Phase enforcement touches six existing transactors:
 - **`VaultCreate`** — accepts the new optional `VaultKind` field; when `ClosedEnded`, also requires `SubscriptionDate` and `RedemptionDate` and validates their ordering and minimum gap.
 - **`VaultSet`** — must reject any attempt to modify `VaultKind`, `SubscriptionDate`, or `RedemptionDate`, as these fields are immutable once set.
 - **`VaultDeposit`** — new deposits are permitted only during `Subscription`. They are rejected in `Investment` (capital is locked) and `Redemption` (the raise is over).
-- **`VaultWithdraw`** — withdrawals are permitted during `Subscription` (LPs may cancel) and `Redemption` (LPs exit at NAV), but blocked during `Investment` to enforce the lock-up.
+- **`VaultWithdraw`** — withdrawals are permitted only during `Redemption` (LPs exit at NAV) and rejected during `Subscription` and `Investment`, so once capital is committed it stays locked until the redemption window opens.
 - **`LoanSet`** — loan origination is restricted to the `Investment` phase; it is rejected during `Subscription` (capital not yet locked) and `Redemption` (depositors are exiting). Additionally, the loan's final scheduled payment must fall at least `REDEMPTION_BUFFER` before `RedemptionDate`, ensuring all repayments are collected before the redemption window opens.
 - **`LoanAccept`** — activating a two-step loan is likewise restricted to the `Investment` phase for the same reasons as `LoanSet`.
 
@@ -58,7 +58,7 @@ The full permission matrix across all transactors and phases is:
 | Transaction   | Open-ended | Subscription | Investment | Redemption |
 | ------------- | ---------- | ------------ | ---------- | ---------- |
 | VaultDeposit  | allowed    | allowed      | rejected   | rejected   |
-| VaultWithdraw | allowed    | allowed      | rejected   | allowed    |
+| VaultWithdraw | allowed    | rejected     | rejected   | allowed    |
 | VaultDonation | allowed    | allowed      | allowed    | allowed    |
 | LoanSet       | allowed    | rejected     | allowed\*  | rejected   |
 | LoanAccept    | allowed    | rejected     | allowed    | rejected   |
@@ -143,7 +143,7 @@ No changes.
 
 #### 3.4.2. Failure Conditions
 
-- If the vault phase (see 2.2) is `Investment`, return `tecNO_PERMISSION`.
+- If the vault phase (see 2.2) is `Subscription` or `Investment`, return `tecNO_PERMISSION`.
 
 #### 3.4.3. State Changes
 
@@ -151,7 +151,7 @@ No changes.
 
 #### 3.4.4. Invariants
 
-- No `VaultWithdraw` succeeds when the vault's phase is `Investment` (closed-ended).
+- No `VaultWithdraw` succeeds when the vault's phase is `Subscription` or `Investment` (closed-ended).
 
 ### 3.5. Transaction: `LoanSet` (modified)
 
@@ -215,7 +215,7 @@ No changes.
 
 This proposal stores two immutable dates on the vault and derives all three phases from them and the parent ledger close time:
 
-- **Subscription** - before `SubscriptionDate`. The vault is still raising capital; Liquidity Providers may deposit and may withdraw to cancel.
+- **Subscription** - before `SubscriptionDate`. The vault is raising capital; Liquidity Providers may deposit but cannot withdraw, so committed capital is locked from the moment it is deposited.
 - **Investment** - on/after `SubscriptionDate` and before `RedemptionDate`. The subscription window has closed; deposits and withdrawals are locked while capital is deployed into loans.
 - **Redemption** - at/after `RedemptionDate`, unconditionally.
 
@@ -238,7 +238,7 @@ A date-driven `SubscriptionDate` keeps the vault entirely unaware of loans: the 
 - **VaultCreate:** valid closed-ended creation; missing `SubscriptionDate` or `RedemptionDate` returns `temMALFORMED`; `SubscriptionDate` in the past returns `temMALFORMED`; a gap smaller than `REDEMPTION_BUFFER` (including `SubscriptionDate >= RedemptionDate`) returns `temMALFORMED`; a gap exactly equal to `REDEMPTION_BUFFER` is accepted; open-ended (or absent kind) with `SubscriptionDate` or `RedemptionDate` present returns `temMALFORMED`; unknown `VaultKind` returns `temMALFORMED`.
 - **Phase derivation:** the vault's phase is `Subscription` before `SubscriptionDate`, `Investment` on/after `SubscriptionDate` and before `RedemptionDate`, and `Redemption` at/after `RedemptionDate`; open-ended vaults are `NoPhase`.
 - **VaultDeposit:** allowed in Subscription; rejected in Investment and Redemption; open-ended unaffected.
-- **VaultWithdraw:** allowed in Subscription and Redemption; rejected in Investment; open-ended unaffected; `AssetsAvailable` cap still applies.
+- **VaultWithdraw:** allowed in Redemption; rejected in Subscription and Investment; open-ended unaffected; `AssetsAvailable` cap still applies.
 - **LoanSet:** rejected in Subscription and Redemption; permitted in Investment when the loan's final payment plus `REDEMPTION_BUFFER` is strictly before `RedemptionDate`; rejected when it is not.
 - **LoanAccept:** rejected in Subscription and Redemption; permitted in Investment.
 - **VaultSet:** attempts to mutate `VaultKind`, `SubscriptionDate`, or `RedemptionDate` return `temMALFORMED`.
